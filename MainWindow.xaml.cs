@@ -245,15 +245,24 @@ namespace TVBoxPC
         }
 
         // ===================== 配置加载 =====================
-        private async Task LoadConfig(string input)
+        private async Task LoadConfig(string rawInput)
         {
             try
             {
                 tbImportMsg.Text = "加载中…";
+                var input = NormalizeConfigInput(rawInput);
                 JsonNode? node;
-                if (input.Contains("://")) node = await _cfg.LoadFromUrl(input);
-                else if (File.Exists(input)) node = await _cfg.LoadFromText(await File.ReadAllTextAsync(input), input);
-                else node = await _cfg.LoadFromText(input);
+                if (input.Contains("://"))
+                    node = await _cfg.LoadFromUrl(input);
+                else if (File.Exists(input))
+                    node = await _cfg.LoadFromText(await File.ReadAllTextAsync(input), input);
+                else if (input.Contains('\\') || input.Contains('/'))
+                {
+                    tbImportMsg.Text = "失败：找不到文件 " + input;
+                    return;
+                }
+                else
+                    node = await _cfg.LoadFromText(input);
                 if (node == null) { tbImportMsg.Text = "解析失败：返回内容不是有效配置。"; return; }
                 _config = node;
 
@@ -313,6 +322,38 @@ namespace TVBoxPC
             {
                 tbImportMsg.Text = "失败：" + ex.Message;
             }
+        }
+
+        /// <summary>
+        /// 清洗用户从剪贴板/文件属性里复制来的路径：去掉方向控制符、BOM、两端引号、file:// 前缀。
+        /// 这样「填本机文件路径」时不会因为混入不可见字符而报 "0xE2 is an invalid start"。
+        /// </summary>
+        private static string NormalizeConfigInput(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return input;
+            var sb = new System.Text.StringBuilder(input.Length);
+            foreach (var c in input)
+            {
+                // 去掉 Unicode 方向控制字符与 BOM（粘贴路径时常见）
+                if (c is '\u200E' or '\u200F' or '\u202A' or '\u202B' or '\u202C' or
+                    '\u202D' or '\u202E' or '\u2066' or '\u2067' or '\u2068' or '\u2069' or '\uFEFF')
+                    continue;
+                sb.Append(c);
+            }
+            var s = sb.ToString().Trim();
+            // file:///C:\... 或 file://C:\... -> C:\...
+            if (s.StartsWith("file:///", StringComparison.OrdinalIgnoreCase)) s = s.Substring(8);
+            else if (s.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
+            // 去掉两端引号（直引号 / 弯引号）
+            while (s.Length >= 2 &&
+                   ((s[0] == '"' && s[^1] == '"') ||
+                    (s[0] == '\'' && s[^1] == '\'') ||
+                    (s[0] == '“' && s[^1] == '”') ||
+                    (s[0] == '‘' && s[^1] == '’')))
+            {
+                s = s.Substring(1, s.Length - 2).Trim();
+            }
+            return s;
         }
 
         /// <summary>源下拉里显示的名字：标出该源的解析类型，不可用的标 ⚠。</summary>
@@ -1529,6 +1570,18 @@ namespace TVBoxPC
         private void TbSearch_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter) _ = DoSearch();
+        }
+
+        /// <summary>搜索框清空后自动回到当前源的分类首页，避免删完关键字还卡在「无结果」提示。</summary>
+        private void TbSearch_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_client == null || !_client.Available) return;
+            if (string.IsNullOrWhiteSpace(tbSearch.Text) && _browseMode == "search")
+            {
+                _searchKw = "";
+                _browseMode = "list";
+                _ = LoadHome(1);
+            }
         }
 
         private void BtnSearch_Click(object sender, RoutedEventArgs e) => _ = DoSearch();
@@ -3070,7 +3123,22 @@ namespace TVBoxPC
             try { _mp?.Stop(); } catch { }
             SetPlayStatus("");
             ExitFullScreen();
-            ShowHome();
+            // 从搜索结果页返回时，不要停留在旧的搜索结果，而是回到当前源的分类首页；
+            // 从聚合搜索结果页返回时，则回到聚合搜索列表（保留多源结果）。
+            if (_browseMode == "agg")
+            {
+                ShowList();
+            }
+            else if (_browseMode == "search")
+            {
+                _searchKw = "";
+                _browseMode = "list";
+                _ = LoadHome(1);
+            }
+            else
+            {
+                ShowHome();
+            }
         }
 
         private void BtnLoadMore_Click(object sender, RoutedEventArgs e)

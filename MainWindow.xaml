@@ -171,7 +171,7 @@
 
             <TextBox x:Name="tbSearch" Grid.Column="2" VerticalAlignment="Center" Height="32" Margin="0,0,8,0"
                      Background="#1d1d24" Foreground="#eee" BorderBrush="#33333c" Padding="10,0"
-                     VerticalContentAlignment="Center" KeyDown="TbSearch_KeyDown"/>
+                     VerticalContentAlignment="Center" KeyDown="TbSearch_KeyDown" TextChanged="TbSearch_TextChanged"/>
 
             <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
                 <Button x:Name="btnSearch" Content="搜索" Width="60" Height="32" Margin="0,0,6,0" Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnSearch_Click"/>
