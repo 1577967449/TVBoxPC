@@ -1,0 +1,794 @@
+<Window x:Class="TVBoxPC.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
+        Title="TVBox PC" Height="760" Width="1280" MinWidth="900" MinHeight="560"
+        Background="#0d0d0f" Foreground="#e8e8ea"
+        FontFamily="Microsoft YaHei, PingFang SC, system-ui">
+    <Window.Resources>
+        <!--
+          ★ 为什么必须自己写模板：WPF 的 ComboBox 默认模板（Aero2）**不吃** Background/Foreground，
+            它按系统主题画白底黑框。所以以前在 XAML 里写了 Background="#1d1d24" Foreground="#eee"
+            也完全没用 —— 界面上就是"白底 + 浅灰字"，源选择框根本看不清。
+            要改外观只能整块换模板（下面这个）。
+        -->
+        <Style x:Key="DarkComboItem" TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="#e8e8ea"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#33333d"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#ff5a36"/>
+                                <Setter Property="Foreground" Value="#ffffff"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DarkCombo" TargetType="ComboBox">
+            <Setter Property="Foreground" Value="#e8e8ea"/>
+            <Setter Property="Background" Value="#1d1d24"/>
+            <Setter Property="BorderBrush" Value="#3a3a42"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="MainBd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                    CornerRadius="5" SnapsToDevicePixels="True">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ContentPresenter Grid.Column="0" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                      HorizontalAlignment="Left"
+                                                      TextElement.Foreground="{TemplateBinding Foreground}"
+                                                      Content="{TemplateBinding SelectionBoxItem}"
+                                                      ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                      ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                                    <Path Grid.Column="1" Margin="8,0,10,0" VerticalAlignment="Center"
+                                          Data="M0,0 L4.5,5 L9,0 Z" Fill="#c8c8d0"/>
+                                </Grid>
+                            </Border>
+                            <!-- 透明按钮铺满整格：点哪儿都能展开 -->
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent"/>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True"
+                                   Focusable="False" PopupAnimation="Fade"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <Border MinWidth="{TemplateBinding ActualWidth}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,2,0,0"
+                                        Background="#1d1d24" BorderBrush="#3a3a42" BorderThickness="1"
+                                        CornerRadius="5">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"
+                                                        SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="MainBd" Property="BorderBrush" Value="#ff5a36"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 深色扁平滑块（进度条 / 音量条）。同理：默认 Slider 也是系统浅色主题，深底上看不清。 -->
+        <Style x:Key="FlatSlider" TargetType="Slider">
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center" Background="Transparent">
+                            <Border Height="4" CornerRadius="2" Background="#33333d" VerticalAlignment="Center"/>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" CornerRadius="2" Background="#ff5a36" VerticalAlignment="Center"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="13" Height="13" Focusable="False">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Width="13" Height="13" Fill="#ffffff"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===== 顶栏：源下拉 + 搜索 + 功能入口 ===== -->
+        <Grid x:Name="topBar" Grid.Row="0" Background="#15151a">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Text="TVBox PC" FontSize="19" FontWeight="Bold" VerticalAlignment="Center" Margin="14,0,10,0" Foreground="#fff"/>
+
+            <!-- 仓库源选择：原先用默认模板 → 白底浅灰字，看不清。现在统一走 DarkCombo。 -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                <TextBlock Text="源" Foreground="#7a7a84" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox x:Name="cbSites" Width="200" Height="32" Style="{StaticResource DarkCombo}"
+                          Foreground="#ffffff" Background="#24242e" BorderBrush="#4a4a58"
+                          ToolTip="仓库源：点开可在配置里的多个站源之间切换（🕷 开头的是蜘蛛源）"
+                          SelectionChanged="CbSites_SelectionChanged"/>
+            </StackPanel>
+
+            <TextBox x:Name="tbSearch" Grid.Column="2" VerticalAlignment="Center" Height="32" Margin="0,0,8,0"
+                     Background="#1d1d24" Foreground="#eee" BorderBrush="#33333c" Padding="10,0"
+                     VerticalContentAlignment="Center" KeyDown="TbSearch_KeyDown"/>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                <Button x:Name="btnSearch" Content="搜索" Width="60" Height="32" Margin="0,0,6,0" Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnSearch_Click"/>
+                <Button x:Name="btnAgg" Content="聚合搜索" Width="76" Height="32" Margin="0,0,6,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnAgg_Click"/>
+                <Button x:Name="btnHistory" Content="历史" Width="56" Height="32" Margin="0,0,6,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnHistory_Click"/>
+                <Button x:Name="btnFav" Content="收藏" Width="56" Height="32" Margin="0,0,6,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnFav_Click"/>
+                <Button x:Name="btnImport" Content="导入配置" Width="80" Height="32" Margin="0,0,6,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnImport_Click"/>
+                <Button x:Name="btnSettings" Content="设置" Width="56" Height="32" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnSettings_Click"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- ===== 分类标签横排（TVBox 风格）===== -->
+        <ScrollViewer x:Name="catBar" Grid.Row="1" Background="#101015"
+                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="catTabs" Orientation="Horizontal" Margin="10,5"/>
+        </ScrollViewer>
+
+        <!-- ===== 主体：内容区 + 右侧下载面板 =====
+             下载面板是「伸缩栏」：中间那条 12px 的把手点一下就能收起/展开。
+             以前播放页横跨整宽把面板盖住了，看着就是"下载选项没了"。 -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="380"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition x:Name="dlCol" Width="330"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 内容区：网格 / 列表 / 详情 / 播放页（四选一）-->
+            <Grid Grid.Column="0">
+                <!-- 网格（首页/分类浏览/搜索）-->
+                <ScrollViewer x:Name="pnlHome" Visibility="Visible">
+                    <StackPanel>
+                        <TextBlock x:Name="homeTip" Foreground="#8a8a92" FontSize="13" Margin="16,12,16,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                        <WrapPanel x:Name="homePanel" Margin="14"/>
+                        <Button x:Name="btnLoadMore" Content="加载更多" Width="160" Height="36" HorizontalAlignment="Center"
+                                Margin="0,4,0,16" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42"
+                                Click="BtnLoadMore_Click" Visibility="Collapsed"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 列表（历史 / 收藏 / 聚合搜索结果）-->
+                <ScrollViewer x:Name="pnlList" Visibility="Collapsed">
+                    <StackPanel Margin="14">
+                        <TextBlock x:Name="listTitle" FontSize="17" FontWeight="Bold" Margin="4,4,0,10"/>
+                        <StackPanel x:Name="listPanel"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 详情 -->
+                <ScrollViewer x:Name="pnlDetail" Visibility="Collapsed">
+                    <StackPanel Margin="18">
+                        <Button x:Name="btnBackDetail" Content="← 返回" Width="80" HorizontalAlignment="Left" Margin="0,0,0,10" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnBackHome_Click"/>
+                        <!-- 海报 + 信息：信息列用 * 自适应（原来是写死 560 宽，窗口一窄就溢出） -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Image Grid.Column="0" x:Name="dPoster" Width="190" Height="270" Stretch="Fill" VerticalAlignment="Top"/>
+                            <StackPanel Grid.Column="1" Margin="18,0">
+                                <TextBlock x:Name="dName" FontSize="22" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="dMeta" Foreground="#ff8a6a" FontSize="13" Margin="0,6,0,8" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="dDesc" Foreground="#b5b5bd" FontSize="13" TextWrapping="Wrap" MaxHeight="150" VerticalAlignment="Top"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="btnFavToggle" Content="☆ 收藏" Width="90" Height="30" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnFavToggle_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock x:Name="dLinesLabel" Text="线路" Foreground="#8a8a92" FontSize="13" Margin="0,16,0,8" Visibility="Collapsed"/>
+                        <WrapPanel x:Name="detailLines" Margin="0,0,0,4"/>
+                        <TextBlock Text="选集" Foreground="#8a8a92" FontSize="13" Margin="0,8,0,8"/>
+                        <WrapPanel x:Name="detailEpisodes"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- 播放页不在这里：它要横跨整宽（视频左上 / 信息在右侧 / 选集在下方，
+                     与 TVBox 一致），所以挪到外层 Grid 里去了，见本文件末尾。 -->
+            </Grid>
+
+            <!-- 右侧：融合的下载面板（自定义功能，保留）
+                 ★ 布局修正：以前上行是 Height="Auto"，而选集用的是 WrapPanel —— 集数一多（如 900 集）
+                 Auto 行会把整个高度吃掉，下面的"下载任务"（Height="*"）被压成 0 高度完全看不见，
+                 所以点了"下载选中"看起来毫无反应。
+                 现在上下等分（1:1）并且两边各自滚动 —— 下载任务卡现在带按钮行更高，得给它留够地方。 -->
+            <!-- 伸缩把手：点一下收起 / 展开右侧下载面板 -->
+            <Border x:Name="dlHandle" Grid.Column="1" Width="12" Background="#17171d"
+                    Cursor="Hand" ToolTip="点一下收起 / 展开右侧下载面板"
+                    MouseLeftButtonUp="DlHandle_Click">
+                <TextBlock x:Name="dlHandleArrow" Text="❯" Foreground="#8a8a92" FontSize="11"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+
+            <Grid Grid.Column="2" Background="#101015">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="1*"/>
+                    <RowDefinition Height="1"/>
+                    <RowDefinition Height="1*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 上：本剧选集 -->
+                <Grid Grid.Row="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Margin="12,10,12,4">
+                        <TextBlock Text="本剧选集（点一下即勾选）" Foreground="#8a8a92" FontSize="12" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <Button x:Name="btnDlAll" Content="下载整部" Width="90" Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnDlAll_Click"/>
+                            <Button x:Name="btnDlSelected" Content="下载选中" Width="90" Margin="8,0,0,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnDlSelected_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="btnSelAll" Content="全选" Width="60" Height="24" FontSize="12" Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c" Click="BtnSelAll_Click"/>
+                            <Button x:Name="btnSelNone" Content="全不选" Width="64" Height="24" FontSize="12" Margin="6,0,0,0" Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c" Click="BtnSelNone_Click"/>
+                            <TextBlock x:Name="tbSelInfo" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <ScrollViewer x:Name="epScroll" Grid.Row="1" Margin="8,2,8,6" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <WrapPanel x:Name="rightEpisodes"/>
+                    </ScrollViewer>
+                </Grid>
+
+                <Border Grid.Row="1" Background="#22222a"/>
+
+                <!-- 下：下载任务 -->
+                <Grid Grid.Row="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Margin="12,8,12,4">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="下载任务" Foreground="#8a8a92" FontSize="12" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="tbDlSummary" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <!-- 第一排：主操作（新建下载 = 猫抓那种"粘地址就能下"）-->
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button x:Name="btnNewDl" Content="+ 新建下载" Width="92" Height="24" FontSize="12"
+                                    Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnNewDl_Click"/>
+                            <Button x:Name="btnOpenDlDir" Content="打开下载目录" Width="102" Height="24" FontSize="12" Margin="6,0,0,0"
+                                    Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c" Click="BtnOpenDlDir_Click"/>
+                        </StackPanel>
+                        <!-- 第二排：清理类 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button x:Name="btnClearDl" Content="清除已完成" Width="92" Height="24" FontSize="12"
+                                    Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c" Click="BtnClearDl_Click"/>
+                            <Button x:Name="btnCancelDl" Content="全部取消" Width="80" Height="24" FontSize="12" Margin="6,0,0,0"
+                                    Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c" Click="BtnCancelDl_Click"/>
+                            <Button x:Name="btnDlCmds" Content="命令" Width="56" Height="24" FontSize="12" Margin="6,0,0,0"
+                                    Background="#22222a" Foreground="#b5b5bd" BorderBrush="#33333c"
+                                    ToolTip="把下载地址翻译成 ffmpeg / N_m3u8DL-RE / aria2c 命令（需先在下方选中一条任务）"
+                                    Click="BtnDlCmds_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <ScrollViewer x:Name="dlScroll" Grid.Row="1" Margin="12,2,12,8" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="dlTasks"/>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- ===== 播放页（TVBox 同款排布：视频在左上、影片信息在右侧、选集在下方）=====
+                 注意它只占内容区这一列 —— 右侧下载面板是独立的伸缩栏，不再被它盖住。 -->
+            <Grid x:Name="pnlPlayer" Grid.Column="0" Visibility="Collapsed" Background="#0d0d0f">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition x:Name="playBodyRow" Height="0.55*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="1"/>
+                    <RowDefinition x:Name="playEpRow" Height="0.45*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 顶栏 -->
+                <StackPanel x:Name="playerTopBar" Grid.Row="0" Orientation="Horizontal" Background="#15151a">
+                    <Button x:Name="btnBackPlayer" Content="← 返回" Width="80" Margin="8" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42"
+                            ToolTip="回到影片详情页" Click="BtnBackFromPlayer_Click"/>
+                    <Button x:Name="btnPlayerDlPanel" Content="下载面板" Width="86" Margin="0,8,0,8" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42"
+                            ToolTip="收起 / 展开右侧的下载面板（也可以点两栏之间的那条把手）"
+                            Click="BtnPlayerDlPanel_Click"/>
+                    <TextBlock x:Name="playerTitle" VerticalAlignment="Center" Margin="12,0" Foreground="#ccc" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+
+                <!-- 状态条：把「正在缓冲 / 播放失败的具体原因」写出来 -->
+                <Border x:Name="playerStatusBox" Grid.Row="1" Background="#241a16" BorderBrush="#3a2a24"
+                        BorderThickness="0,0,0,1" Padding="14,8" Visibility="Collapsed">
+                    <TextBlock x:Name="playerStatus" Foreground="#ffb08a" FontSize="12" TextWrapping="Wrap"/>
+                </Border>
+
+                <!-- 上半：左 = 视频，右 = 影片信息
+                     两列按比例分（不是固定宽）：窗口 1280 时约 530/400，窗口 1080 时约 430/330，
+                     视频不会被信息栏挤成一条缝。 -->
+                <Grid Grid.Row="2" Background="#0d0d0f">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="vidCol" Width="1.35*" MinWidth="240"/>
+                        <ColumnDefinition x:Name="vidSepCol" Width="1"/>
+                        <ColumnDefinition x:Name="infoCol" Width="1*" MinWidth="300"/>
+                    </Grid.ColumnDefinitions>
+
+                    <vlc:VideoView x:Name="videoView" Grid.Column="0" Background="Black"/>
+
+                    <Border Grid.Column="1" Background="#22222a"/>
+
+                    <!-- 信息栏 = 上面「可滚动的内容」+ 下面「固定的操作按钮条」。
+                         按钮条刻意不参与滚动 —— 实测 1280x760 时信息栏可视高只有 294px，
+                         原来按钮排排在 Y=275、底边 383，几乎整排在可视区之外，
+                         用户得往下滚才看得到「切源」，等于白加。 -->
+                    <Grid x:Name="pvInfoPane" Grid.Column="2" Background="#101015">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <ScrollViewer Grid.Row="0" Background="#101015" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="16,14,16,12">
+                            <TextBlock x:Name="pvTitle" FontSize="19" FontWeight="Bold" TextWrapping="Wrap" Foreground="#fff"/>
+                            <TextBlock x:Name="pvMeta" Foreground="#d8d8e0" FontSize="12.5" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            <TextBlock x:Name="pvActor" Foreground="#c8c8d0" FontSize="12.5" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            <TextBlock x:Name="pvDirector" Foreground="#c8c8d0" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="pvAddress" Foreground="#7ea6e0" FontSize="11.5" TextWrapping="Wrap"
+                                       Margin="0,5,0,0" Cursor="Hand" ToolTip="点一下复制这条播放地址"
+                                       MouseLeftButtonUp="PvAddress_MouseUp"/>
+                            <TextBlock x:Name="pvDesc" Foreground="#a9a9b4" FontSize="12.5" TextWrapping="Wrap"
+                                       MaxHeight="78" Margin="0,6,0,0"/>
+
+                            <!-- 源 / 线路 / 集数分组 -->
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="源" Foreground="#7a7a84" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Border Background="#1d1d24" BorderBrush="#3a3a42" BorderThickness="1" CornerRadius="4" Padding="10,4">
+                                    <TextBlock x:Name="pvSourceTag" Foreground="#8fd08f" FontSize="12"/>
+                                </Border>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="线路" Foreground="#7a7a84" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <WrapPanel x:Name="pvLines"/>
+                            </StackPanel>
+                            <StackPanel x:Name="pvGroupRow" Orientation="Horizontal" Margin="0,10,0,0" Visibility="Collapsed">
+                                <TextBlock Text="分页" Foreground="#7a7a84" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <WrapPanel x:Name="pvGroups"/>
+                            </StackPanel>
+                        </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- 固定操作条：全屏 / 快速搜索 / 简介 / 收藏 / 切源 / 下载本集 / 复制地址（照 TVBox 补齐）。
+                             横铺满、不随上面的内容滚动，窗口再小也点得到。 -->
+                        <Border Grid.Row="1" Background="#15151a" BorderBrush="#26262e" BorderThickness="0,1,0,0"
+                                Padding="12,8,12,8">
+                            <WrapPanel x:Name="pvBtns">
+                                <Button x:Name="btnFullScreen" Content="全屏" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#ff6b35" Foreground="#fff" BorderBrush="#ff6b35" Click="BtnFullScreen_Click"/>
+                                <Button x:Name="btnQuickSearch" Content="快速搜索" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#2196f3" Foreground="#fff" BorderBrush="#2196f3"
+                                        ToolTip="用剧名在当前源里再搜一次" Click="BtnQuickSearch_Click"/>
+                                <Button x:Name="btnIntro" Content="简介" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#8bc34a" Foreground="#fff" BorderBrush="#8bc34a" Click="BtnIntro_Click"/>
+                                <Button x:Name="btnFavToggle2" Content="☆ 收藏" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#e8443a" Foreground="#fff" BorderBrush="#e8443a" Click="BtnFavToggle_Click"/>
+                                <Button x:Name="btnSwitchSrc" Content="切源" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#009688" Foreground="#fff" BorderBrush="#009688"
+                                        ToolTip="用剧名去别的源里找同一部剧，一键换源（尽量停在当前这一集）"
+                                        Click="BtnSwitchSrc_Click"/>
+                                <Button x:Name="btnDlCurEp" Content="下载本集" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#5c6bc0" Foreground="#fff" BorderBrush="#5c6bc0"
+                                        ToolTip="把正在看的这一集加入下载队列" Click="BtnPvDlCur_Click"/>
+                                <Button x:Name="btnCopyUrl" Content="复制地址" Width="84" Height="30" FontSize="12.5" Margin="0,0,6,6"
+                                        Background="#78909c" Foreground="#fff" BorderBrush="#78909c"
+                                        ToolTip="复制当前播放地址（可拿去丢给别的播放器/下载器）" Click="PvAddress_Click"/>
+                            </WrapPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <!-- ===== 播放控制条（上一集 / 暂停 / 下一集 / 音量 / 进度 / 时间 / 倍速 / 全屏）=====
+                     放在视频**下方**、不叠在画面上：VideoView 是原生子窗口（HwndHost），
+                     永远浮在所有 WPF 元素之上，叠上去只会被视频吞掉（切源列表被挡就是这个原因）。
+                     全屏时这一条也保留，只把顶栏 / 信息栏 / 选集区收起来。 -->
+                <Border x:Name="playBar" Grid.Row="3" Background="#15151a" BorderBrush="#22222a"
+                        BorderThickness="0,1,0,0" Padding="10,6">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*" MinWidth="80"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button x:Name="btnPrevEp" Grid.Column="0" Content="⏮ 上一集" Width="78" Height="28" FontSize="12"
+                                Background="#22222a" Foreground="#e8e8ea" BorderBrush="#33333c" Click="BtnPrevEp_Click"/>
+                        <Button x:Name="btnPlayPause" Grid.Column="1" Content="▶" Width="46" Height="28" FontSize="13" Margin="6,0,0,0"
+                                Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36"
+                                ToolTip="播放 / 暂停" Click="BtnPlayPause_Click"/>
+                        <Button x:Name="btnNextEp" Grid.Column="2" Content="下一集 ⏭" Width="78" Height="28" FontSize="12" Margin="6,0,0,0"
+                                Background="#22222a" Foreground="#e8e8ea" BorderBrush="#33333c" Click="BtnNextEp_Click"/>
+
+                        <TextBlock Grid.Column="3" Text="🔊" Foreground="#c8c8d0" FontSize="13"
+                                   VerticalAlignment="Center" Margin="14,0,5,0"/>
+                        <Slider x:Name="slVolume" Grid.Column="4" Width="88" Minimum="0" Maximum="100" Value="100"
+                                Style="{StaticResource FlatSlider}" VerticalAlignment="Center"
+                                IsMoveToPointEnabled="True" ToolTip="音量"
+                                ValueChanged="SlVolume_ValueChanged"/>
+                        <TextBlock Grid.Column="5" x:Name="tbVol" Text="100" Foreground="#7a7a84" FontSize="11"
+                                   VerticalAlignment="Center" Margin="5,0,0,0"/>
+
+                        <Slider x:Name="slSeek" Grid.Column="6" Minimum="0" Maximum="1000" Value="0" Margin="16,0"
+                                Style="{StaticResource FlatSlider}" VerticalAlignment="Center"
+                                IsMoveToPointEnabled="True" ToolTip="拖动定位"
+                                ValueChanged="SlSeek_ValueChanged"/>
+                        <TextBlock Grid.Column="7" x:Name="tbTime" Text="0:00 / 0:00" Foreground="#c8c8d0" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+                        <ComboBox x:Name="cbSpeed" Grid.Column="8" Width="76" Height="28" Style="{StaticResource DarkCombo}"
+                                  SelectedIndex="2" VerticalAlignment="Center" Margin="0,0,8,0"
+                                  ToolTip="播放倍速" SelectionChanged="CbSpeed_SelectionChanged">
+                            <ComboBoxItem Content="0.5x"/>
+                            <ComboBoxItem Content="0.75x"/>
+                            <ComboBoxItem Content="1.0x"/>
+                            <ComboBoxItem Content="1.25x"/>
+                            <ComboBoxItem Content="1.5x"/>
+                            <ComboBoxItem Content="2.0x"/>
+                        </ComboBox>
+                        <Button x:Name="btnFullScreen2" Grid.Column="9" Content="全屏" Width="70" Height="28" FontSize="12"
+                                Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnFullScreen_Click"/>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="4" Background="#22222a"/>
+
+                <!-- 下半：选集（整行，与 TVBox 一致）-->
+                <Grid x:Name="playBottom" Grid.Row="5" Background="#101015">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <WrapPanel Grid.Row="0" Margin="14,10,14,6">
+                        <TextBlock Text="选集" Foreground="#e8e8ea" FontSize="14" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="pvEpHint" Foreground="#7a7a84" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        <Button x:Name="btnPvDlCur" Content="下载本集" Width="86" Height="26" FontSize="12" Margin="18,0,0,0"
+                                Background="#22222a" Foreground="#e8e8ea" BorderBrush="#33333c" Click="BtnPvDlCur_Click"/>
+                        <Button x:Name="btnPvDlAll" Content="下载整部" Width="86" Height="26" FontSize="12" Margin="6,0,0,0"
+                                Background="#22222a" Foreground="#e8e8ea" BorderBrush="#33333c" Click="BtnDlAll_Click"/>
+                        <Button x:Name="btnPvOrder" Content="倒序" Width="60" Height="26" FontSize="12" Margin="14,0,0,0"
+                                Background="#22222a" Foreground="#e8e8ea" BorderBrush="#33333c"
+                                ToolTip="集数太多时倒序排列（默认正序）" Click="BtnPvOrder_Click"/>
+                    </WrapPanel>
+                    <ScrollViewer Grid.Row="1" Margin="10,0,10,10" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <WrapPanel x:Name="playEpisodes"/>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- ===== 切源（用剧名去别的源里找同一部剧）===== -->
+        <Grid x:Name="dlgSwitchSrc" Grid.RowSpan="3" Background="#000000cc" Visibility="Collapsed">
+            <Border Background="#15151a" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="8"
+                    Width="640" Height="520" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <Grid Margin="20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="切源" FontSize="17" FontWeight="Bold"/>
+                    <TextBlock x:Name="swHead" Grid.Row="1" Foreground="#ffb08a" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    <TextBlock Grid.Row="2" Text="点一条即切到那个源，并尽量跳到你现在看的这一集。" Foreground="#7a7a84" FontSize="11.5" Margin="0,6,0,6"/>
+                    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="swBody"/>
+                    </ScrollViewer>
+                    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <Button Content="关闭" Width="80" Margin="6" Background="#2a2a30" Foreground="#e8e8ea"
+                                BorderBrush="#3a3a42" Click="BtnSwitchClose_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ===== 新建下载（对标猫抓的 m3u8 解析器：粘地址 → 解析 → 选画质/范围/密钥 → 下载） ===== -->
+        <Grid x:Name="dlgNewDl" Grid.RowSpan="3" Background="#000000cc" Visibility="Collapsed">
+            <Border Background="#15151a" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="8"
+                    Width="720" Height="690" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="22">
+                        <TextBlock Text="新建下载" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock Text="把播放地址粘进来就行（m3u8 清单或 mp4/flv 直链）。可只下某一段、挑画质、填密钥。"
+                                   Foreground="#9a9aa2" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                        <TextBlock Text="① 下载地址" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="tbNewUrl" Grid.Column="0" Height="32" Background="#1d1d24" Foreground="#eee"
+                                     BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"
+                                     TextChanged="TbNewUrl_TextChanged"/>
+                            <Button x:Name="btnNewParse" Grid.Column="1" Content="解析地址" Width="86" Height="32" Margin="6,0,0,0"
+                                    Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnNewParse_Click"/>
+                        </Grid>
+                        <Border Background="#101015" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="4"
+                                Padding="10" Margin="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="tbNewPreview" Foreground="#8fbf8f" FontSize="12" TextWrapping="Wrap"
+                                           Text="还没解析。点「解析地址」可以先看清这份清单有多少分片、多长、要不要密钥。"/>
+                                <StackPanel x:Name="pnlNewVariant" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                                    <TextBlock Text="画质" Foreground="#9a9aa2" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="cbNewVariant" Width="420" SelectedIndex="0" Style="{StaticResource DarkCombo}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="② 保存文件名（不含扩展名）" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBox x:Name="tbNewName" Height="32" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="保存子目录（在下载根目录下）" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBox x:Name="tbNewFolder" Height="32" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="③ 只下载一部分（留空 = 全部）" Foreground="#9a9aa2" FontSize="12" Margin="0,14,0,4"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="分片" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBox x:Name="tbNewFromSeg" Width="70" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                                <TextBlock Text="~" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="6,0"/>
+                                <TextBox x:Name="tbNewToSeg" Width="70" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                <TextBlock Text="时间" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBox x:Name="tbNewFromTime" Width="70" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                                <TextBlock Text="~" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="6,0"/>
+                                <TextBox x:Name="tbNewToTime" Width="70" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                                <TextBlock Text="秒" Foreground="#6f6f78" FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="时间按秒算（也可写 12:30 这种）。两个都填时以时间为准。" Foreground="#5f5f68" FontSize="11" Margin="0,4,0,0"/>
+
+                        <TextBlock Text="④ 解密密钥（m3u8 里没给、或链接过期时自己填）" Foreground="#9a9aa2" FontSize="12" Margin="0,14,0,4"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="tbNewKey" Grid.Column="0" Height="32" Background="#1d1d24" Foreground="#eee"
+                                     BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"
+                                     ToolTip="16 字节密钥：32 位十六进制 或 base64"/>
+                            <TextBox x:Name="tbNewIv" Grid.Column="2" Height="32" Background="#1d1d24" Foreground="#eee"
+                                     BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"
+                                     ToolTip="IV（可选）：十六进制，留空则按分片序号自动推导"/>
+                        </Grid>
+                        <TextBlock Text="左 = Key（32 位 hex 或 base64）　右 = IV（hex，可留空）" Foreground="#5f5f68" FontSize="11" Margin="0,4,0,0"/>
+
+                        <TextBlock Text="⑤ 请求头（防盗链用；留空则只用地址里自带的）" Foreground="#9a9aa2" FontSize="12" Margin="0,14,0,4"/>
+                        <TextBox x:Name="tbNewReferer" Height="30" Background="#1d1d24" Foreground="#eee"
+                                 BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"
+                                 ToolTip="Referer" Margin="0,0,0,6"/>
+                        <TextBox x:Name="tbNewUa" Height="30" Background="#1d1d24" Foreground="#eee"
+                                 BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"
+                                 ToolTip="User-Agent" Margin="0,0,0,6"/>
+                        <TextBox x:Name="tbNewExtra" Height="56" Background="#1d1d24" Foreground="#eee"
+                                 BorderBrush="#33333c" Padding="10,4" AcceptsReturn="True" TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 ToolTip="其它头，每行一个 Key: Value，例如 Cookie: xxx"/>
+                        <TextBlock Text="从上到下依次是：Referer、User-Agent、其它头（每行一个 Key: Value）"
+                                   Foreground="#5f5f68" FontSize="11" Margin="0,4,0,0"/>
+
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="并发分段数" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBox x:Name="tbNewConc" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="失败重试次数" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBox x:Name="tbNewRetry" Height="30" Background="#1d1d24" Foreground="#eee"
+                                         BorderBrush="#33333c" Padding="8,0" VerticalContentAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Text="输出格式" Foreground="#9a9aa2" FontSize="12" Margin="0,0,0,4"/>
+                                <ComboBox x:Name="cbNewFormat" Height="30" SelectedIndex="0" Style="{StaticResource DarkCombo}">
+                                    <ComboBoxItem Content="自动（按分片类型）"/>
+                                    <ComboBoxItem Content=".ts（原样拼接）"/>
+                                    <ComboBoxItem Content=".mp4（有 ffmpeg 则重封装）"/>
+                                    <ComboBoxItem Content=".aac（只要音频）"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                        <CheckBox x:Name="cbNewSavePl" Content="同时保存原始 m3u8（与密钥）到产物目录 —— 便于离线复用与排障"
+                                  Foreground="#b5b5bd" FontSize="12" Margin="0,12,0,0"/>
+
+                        <TextBlock x:Name="tbNewDlMsg" Foreground="#ff8a6a" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                            <Button Content="取消" Width="80" Margin="6" Background="#2a2a30" Foreground="#e8e8ea"
+                                    BorderBrush="#3a3a42" Click="BtnNewDlCancel_Click"/>
+                            <Button Content="开始下载" Width="100" Margin="6" Background="#ff5a36" Foreground="#fff"
+                                    BorderBrush="#ff5a36" Click="BtnNewDlOk_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- ===== 外部工具命令（ffmpeg / N_m3u8DL-RE / aria2c） ===== -->
+        <Grid x:Name="dlgCmds" Grid.RowSpan="3" Background="#000000cc" Visibility="Collapsed">
+            <Border Background="#15151a" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="8"
+                    Width="760" Height="440" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <StackPanel Margin="20">
+                    <TextBlock x:Name="tbCmdsTitle" Text="外部工具命令" FontSize="17" FontWeight="Bold" Margin="0,0,0,6"/>
+                    <TextBlock Text="把这条地址交给 ffmpeg / N_m3u8DL-RE / aria2c 的命令行。程序不会自动执行 —— 复制后请先看清楚再运行。"
+                               Foreground="#9a9aa2" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <TextBox x:Name="tbCmds" Height="270" Background="#101015" Foreground="#cfe8cf" BorderBrush="#2c2c34"
+                             FontFamily="Consolas, Cascadia Mono, monospace" FontSize="12" Padding="10"
+                             AcceptsReturn="True" TextWrapping="Wrap" IsReadOnly="True"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                        <Button Content="复制全部" Width="90" Margin="6" Background="#ff5a36" Foreground="#fff"
+                                BorderBrush="#ff5a36" Click="BtnCmdsCopy_Click"/>
+                        <Button Content="关闭" Width="80" Margin="6" Background="#2a2a30" Foreground="#e8e8ea"
+                                BorderBrush="#3a3a42" Click="BtnCmdsClose_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 导入配置弹窗 -->
+        <Grid x:Name="dlgImport" Grid.RowSpan="3" Background="#000000aa" Visibility="Collapsed">
+            <Border Background="#15151a" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="8" Width="560" Height="270" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <StackPanel Margin="20">
+                    <TextBlock Text="导入 TVBox 配置" FontSize="18" Margin="0,0,0,8"/>
+                    <TextBlock Text="支持单仓（含 sites）与多仓（含 urls 索引）。可填网络地址，也可填本机文件路径。" Foreground="#9a9aa2" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <TextBox x:Name="tbCfg" Height="34" Background="#1d1d24" Foreground="#eee" BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <TextBlock Text="不确定填什么？" Foreground="#8a8a92" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Button Content="填入内置默认接口" Width="130" Height="26" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnFillDefault_Click"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                        <Button Content="取消" Width="80" Margin="6" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnImportCancel_Click"/>
+                        <Button Content="确定" Width="80" Margin="6" Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnImportOk_Click"/>
+                    </StackPanel>
+                    <TextBlock x:Name="tbImportMsg" Foreground="#ff8a6a" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 设置弹窗 -->
+        <Grid x:Name="dlgSettings" Grid.RowSpan="3" Background="#000000aa" Visibility="Collapsed">
+            <Border Background="#15151a" BorderBrush="#2c2c34" BorderThickness="1" CornerRadius="8" Width="620" Height="520" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="20">
+                    <TextBlock Text="设置" FontSize="18" Margin="0,0,0,12"/>
+                    <TextBlock Text="播放固定使用内置 LibVLC（外部播放器支持已移除，如需用其它播放器可在播放页点「复制地址」后自行打开）。"
+                               Foreground="#9a9aa2" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                    <TextBlock Text="下载保存目录（留空 = 用户目录\Downloads\TVBoxPC）"
+                               Foreground="#9a9aa2" FontSize="11" Margin="0,14,0,4" TextWrapping="Wrap"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="tbDlDir" Grid.Column="0" Height="32" Background="#1d1d24" Foreground="#eee"
+                                 BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                        <Button x:Name="btnPickDlDir" Grid.Column="1" Content="选择…" Width="70" Height="32" Margin="6,0,0,0"
+                                Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnPickDlDir_Click"/>
+                    </Grid>
+                    <TextBlock Text="下载并发分段数（默认 12；网速慢或源站限速时调小到 6）"
+                               Foreground="#9a9aa2" FontSize="11" Margin="0,10,0,4" TextWrapping="Wrap"/>
+                    <TextBox x:Name="tbDlConc" Height="32" Width="120" HorizontalAlignment="Left" Background="#1d1d24"
+                             Foreground="#eee" BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="聚合搜索：并发站点数上限（默认 30）" Foreground="#9a9aa2" FontSize="11" Margin="0,14,0,4"/>
+                    <TextBox x:Name="tbAggLimit" Height="32" Width="120" HorizontalAlignment="Left" Background="#1d1d24" Foreground="#eee" BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="聚合搜索：单个源最长等待秒数（默认 8；到点就当它没结果，不拖累其它源）"
+                               Foreground="#9a9aa2" FontSize="11" Margin="0,10,0,4" TextWrapping="Wrap"/>
+                    <TextBox x:Name="tbAggTimeout" Height="32" Width="120" HorizontalAlignment="Left" Background="#1d1d24" Foreground="#eee" BorderBrush="#33333c" Padding="10,0" VerticalContentAlignment="Center"/>
+                    <CheckBox x:Name="cbProxy" Content="使用系统代理（系统代理失效时取消勾选改为直连，重启生效）" Foreground="#b5b5bd" FontSize="12" Margin="0,14,0,0"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                        <Button Content="清空历史" Width="90" Margin="0,0,6,0" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnClearHistory_Click"/>
+                        <Button Content="取消" Width="80" Margin="6" Background="#2a2a30" Foreground="#e8e8ea" BorderBrush="#3a3a42" Click="BtnSettingsCancel_Click"/>
+                        <Button Content="保存" Width="80" Margin="6" Background="#ff5a36" Foreground="#fff" BorderBrush="#ff5a36" Click="BtnSettingsSave_Click"/>
+                    </StackPanel>
+                </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

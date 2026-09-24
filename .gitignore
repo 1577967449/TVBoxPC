@@ -1,0 +1,21 @@
+# ===== 构建产物 =====
+bin/
+obj/
+*.user
+
+# ===== 第三方 / 运行时二进制（体积大，不入库）=====
+# 这些目录是「蜘蛛运行时」所需的 JRE、依赖库与 dex2jar，合计约 134MB。
+# 仓库只保留其源码与说明；要运行程序，请从 GitHub Release 的打包 zip 里取，
+# 或按 README 自行准备后放进 jvm/ 下对应目录。
+jvm/jre/
+jvm/libs/
+jvm/d2j/
+
+# ===== 运行期生成的用户数据 / 日志（程序运行后才会产生）=====
+*.log
+settings.json
+history.json
+favorites.json
+
+# ===== 系统 / IDE =====
+.vs/

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>TVBoxPC</AssemblyName>
+    <RootNamespace>TVBoxPC</RootNamespace>
+    <!-- 注意：不要开启 InvariantGlobalization，否则 WPF 在解析绑定区域(en-us)时会抛
+         "Cannot find non-neutral culture related to 'en-us'"，点击复选框等控件即崩溃。 -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 默认播放器引擎：LibVLC（与 VLC 同源，原生播放 HLS/TS/MP4）；同时支持调用本机 VLC / PotPlayer 等外部播放器 -->
+    <PackageReference Include="LibVLCSharp" Version="3.8.5" />
+    <PackageReference Include="LibVLCSharp.Wpf" Version="3.8.5" />
+    <!-- 原生 LibVLC 运行时（libvlc.dll 等），保留 PackageReference 以便自动复制到输出目录 -->
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.20" />
+    <!-- 蜘蛛源引擎：AngleSharp 提供 CSS 选择器（等价 cheerio 的抽取能力）；Jint 执行站点自带的 js: 内联脚本 -->
+    <PackageReference Include="AngleSharp" Version="1.1.2" />
+    <PackageReference Include="Jint" Version="4.0.3" />
+    <!-- GBK/GB2312 等中文编码支持（部分蜘蛛站点为 GBK 页面） -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+  <!--
+    JVM 蜘蛛运行时（jre + stubs.jar + libs + d2j，约 70MB）：
+    只在 **publish** 时随包分发，不参与日常 build —— 否则每次编译都拷 70MB 太慢。
+    开发期由 JvmRuntime 沿目录向上查找 TVBoxPC\jvm 即可命中。
+  -->
+  <Target Name="CopyJvmRuntime" AfterTargets="Publish">
+    <ItemGroup>
+      <JvmFiles Include="jvm\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(JvmFiles)"
+          DestinationFiles="@(JvmFiles->'$(PublishDir)jvm\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>
