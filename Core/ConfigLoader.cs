@@ -15,6 +15,9 @@ namespace TVBoxPC.Core
     public class ConfigLoader
     {
         private static readonly HttpClient Http = HttpFactory.Create(25);
+        // 子仓抓取用更短超时（15s）+ 有界并发（16），避免「顺序 × 25s × 大量失效链接」导致导入假死
+        private static readonly HttpClient HttpFast = HttpFactory.Create(15);
+        private const int MaxConcurrency = 16;
 
         private static readonly JsonDocumentOptions DocOpts = new()
         {
@@ -54,22 +57,54 @@ namespace TVBoxPC.Core
                 var parses = new JsonArray();
                 var lives = new JsonArray();
 
-                // 复制一份待处理队列（多仓可能多层嵌套）
+                // ★ 关键修复：顶层自带的内容先种进去，再与子仓合并。
+                // 旧逻辑新建空数组并把顶层站点整个覆盖掉，导致「带 urls 的合并配置」
+                // 在子仓大面积失效时只剩空白、整份配置用不了。现在顶层源 + 子仓源共存
+                // （符合 TVBox/CatVod 约定），网上随便扒的源也能直接加载、坏源自动跳过。
+                var siteKeys = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var parseNames = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var liveNames = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                MergeArray(root["sites"], sites, siteKeys, "key");
+                MergeArray(root["parses"], parses, parseNames, "name");
+                MergeArray(root["lives"], lives, liveNames, "name");
+
+                // 复制一份待处理队列（多仓可能多层嵌套）；seen 跨层去重
                 var queue = new System.Collections.Generic.List<string>();
                 foreach (var u in urls) if (u != null) queue.Add(u.ToString());
 
                 var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 int guard = 0;
+                // 有界并发：同一层的所有子仓链接并行抓取（上限 MaxConcurrency），
+                // 失效链接的 15s 超时只阻塞该批次，而非像旧版那样「顺序 × 25s」逐个累加，
+                // 从而避免导入大体积多仓配置时假死。合并动作在 WhenAll 之后顺序执行，线程安全。
+                using var sem = new System.Threading.SemaphoreSlim(MaxConcurrency);
                 while (queue.Count > 0 && guard++ < 200)
                 {
-                    var subUrl = queue[0];
-                    queue.RemoveAt(0);
-                    if (!seen.Add(subUrl)) continue;
-                    try
+                    // 取当前层、去重、并标记已访问（顺序执行，保证 seen 线程安全）
+                    var level = queue.Distinct(StringComparer.OrdinalIgnoreCase)
+                                     .Where(u => seen.Add(u)).ToList();
+                    queue = new System.Collections.Generic.List<string>();
+
+                    var tasks = level.Select(async u =>
                     {
-                        var subBase = Resolve(baseUrl, subUrl);
-                        var subJson = await Http.GetStringAsync(subBase);
-                        var sub = JsonNode.Parse(subJson, documentOptions: DocOpts);
+                        await sem.WaitAsync();
+                        try
+                        {
+                            var subBase = Resolve(baseUrl, u);
+                            var subJson = await HttpFast.GetStringAsync(subBase);
+                            return (Url: u, Sub: JsonNode.Parse(subJson, documentOptions: DocOpts), Base: subBase);
+                        }
+                        catch
+                        {
+                            // 子仓失效则跳过，不阻断整体
+                            return (Url: u, Sub: (JsonNode?)null, Base: (string?)null);
+                        }
+                        finally { sem.Release(); }
+                    });
+
+                    var results = await Task.WhenAll(tasks);
+                    foreach (var (_, sub, subBase) in results)
+                    {
                         if (sub == null) continue;
                         // 子仓里若有 spider 字段而主仓没有，继承过来 —— 否则 csp_XXX 蜘蛛源
                         // 会因为没有蜘蛛包而全部不可用（多仓配置很常见：索引仓只有 urls，
@@ -78,15 +113,11 @@ namespace TVBoxPC.Core
                             root["spider"] = sub["spider"]!.DeepClone();
                         // 先给子仓的站点打上该子仓的绝对地址，drpy 源的 ./js/xxx.js 才能定位
                         AnnotateSites(sub["sites"], subBase);
-                        MergeArray(sub["sites"], sites);
-                        MergeArray(sub["parses"], parses);
-                        MergeArray(sub["lives"], lives);
+                        MergeArray(sub["sites"], sites, siteKeys, "key");
+                        MergeArray(sub["parses"], parses, parseNames, "name");
+                        MergeArray(sub["lives"], lives, liveNames, "name");
                         if (sub["urls"] is JsonArray nested)
                             foreach (var nu in nested) if (nu != null) queue.Add(nu.ToString());
-                    }
-                    catch
-                    {
-                        // 子仓失效则跳过，不阻断整体
                     }
                 }
 
@@ -123,10 +154,24 @@ namespace TVBoxPC.Core
             }
         }
 
-        private static void MergeArray(JsonNode? src, JsonArray dst)
+        /// <summary>
+        /// 合并一个数组到 dst，同时自动识别并剔除坏条目：
+        ///   · 跳过非对象元素（结构错误）
+        ///   · 跳过缺少 key/name 的条目
+        ///   · 按 keyField 去重（同一 key 只保留首次出现，避免重复源互相覆盖）
+        /// 这样加载「网上随便扒的」配置时，畸形/重复/失效的源不会拖垮整体，也不必让用户去手改 JSON。
+        /// </summary>
+        private static void MergeArray(JsonNode? src, JsonArray dst, System.Collections.Generic.HashSet<string> keys, string keyField)
         {
-            if (src is JsonArray arr)
-                foreach (var x in arr) dst.Add(x?.DeepClone());
+            if (src is not JsonArray arr) return;
+            foreach (var x in arr)
+            {
+                if (x is not JsonObject o) continue;
+                var key = o[keyField]?.ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                if (!keys.Add(key)) continue;
+                dst.Add(x.DeepClone());
+            }
         }
 
         private static string Resolve(string? baseUrl, string url)
